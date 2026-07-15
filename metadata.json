@@ -1,0 +1,10 @@
+{
+  "uuid": "multi-provider-usage@bubbabright",
+  "name": "Multi-Provider Usage",
+  "description": "Show usage for EVERY provider a usage-daemon (github.com/bubbabright/usage-daemon) publishes in one panel indicator. Panel rotates between providers on a configurable interval; popup shows all of them at once. Thin client only — reads http://127.0.0.1:8787, never polls upstream APIs itself. Adding a new daemon provider requires no changes here.",
+  "shell-version": ["46", "47", "48", "49"],
+  "url": "https://github.com/bubbabright/multi-provider-usage-extension",
+  "settings-schema": "org.gnome.shell.extensions.multi-provider-usage",
+  "session-modes": ["user"],
+  "version": 1
+}

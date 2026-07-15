@@ -1,0 +1,15 @@
+*.zip
+schemas/gschemas.compiled
+update
+
+# File-manager duplicate artifacts
+* copy.*
+* copy *.*
+
+# Internal notes / handoffs — never commit
+*.internal.md
+CLAUDE.md
+DANIEL.md
+
+# Local Claude Code settings — machine-specific, not shared
+.claude/

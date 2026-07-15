@@ -1,0 +1,103 @@
+/* Multi-Provider Usage — panel styling.
+ *
+ * Goals: sit cleanly next to other panel indicators. Inherit the panel font
+ * (no hardcoded font-size), stay vertically centered, keep bars modest and
+ * theme-aware. Identity colors (per-window, Okabe-Ito from the daemon) are
+ * applied inline to the fill only — everything else is a CSS class. */
+
+/* .mp-panel's cell spacing (icon/tag/bars, and every bar's own label-track
+ * gap) is set in JS via Clutter.GridLayout's set_column_spacing/
+ * set_row_spacing — St's CSS `spacing` property only exists for BoxLayout
+ * and has no effect on a grid-managed widget, so it's not set here at all. */
+
+.mp-provider-tag {
+    font-size: 0.85em;
+    opacity: 0.85;
+    /* Floor width: this is the only actor in its grid column, and it spans
+     * 2 rows in stacked mode with no span=1 sibling there — GridLayout can
+     * fail to size a column from a spanning-only child, collapsing it to
+     * ~0 width. The icon doesn't have this problem because CSS icon-size
+     * forces its size regardless of column math; text has nothing to force
+     * a floor unless we set one explicitly. */
+    min-width: 60px;
+    /* Ceiling: pairs with clutter_text.ellipsize (set in JS — Pango, not a
+     * CSS property) so a long provider name truncates to "Ollama Cl…"
+     * instead of growing the column/panel indefinitely. */
+    max-width: 90px;
+}
+
+.mp-provider-subtitle {
+    font-size: 0.75em;
+    opacity: 0.6;
+    /* Same shrink-to-fit reasoning as .mp-provider-tag: floor so a spanning-
+     * only column can't collapse, ceiling + JS ellipsize so it can't grow
+     * unbounded either. Only ever attached when non-empty (see
+     * _renderPanelActive), so no floor width is wasted on an unused column. */
+    min-width: 24px;
+    max-width: 60px;
+}
+
+.mp-bar-letter {
+    font-size: 0.8em;
+    width: 22px;
+    text-align: end;
+    text-transform: uppercase;
+}
+
+.mp-bar-track {
+    height: 11px;
+    border-radius: 6px;
+    background-color: rgba(127, 127, 127, 0.25);
+    border: 1px solid rgba(127, 127, 127, 0.30);
+    overflow: hidden;
+}
+
+.mp-bar-fill {
+    height: 11px;
+    border-radius: 6px;
+}
+
+.mp-bar-percent {
+    font-size: 0.8em;
+    /* Monospace + fixed char count (fmtPct pads to 5 chars, extension.js),
+     * NOT a hardcoded pixel width. A pixel guess is tied to one font's
+     * metrics and breaks on anything wider (e.g. OpenDyslexic) — monospace
+     * glyphs are uniform width by definition, so a fixed character count
+     * renders at the same width regardless of which monospace font actually
+     * resolves on the user's system. No CSS width needed at all: natural
+     * size is already invariant. */
+    font-family: monospace;
+    text-align: start;
+}
+
+/* alarm = flashing LOGO, not a bar pulse (any provider/window projected to
+ * deplete flips this on the shared icon; rotation keeps cycling regardless) */
+.system-status-icon.mp-icon-alarm {
+    animation: mp-icon-pulse 1s ease-in-out infinite;
+}
+
+@keyframes mp-icon-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+}
+
+/* dim the whole panel group when the active provider's data is stale */
+.mp-stale {
+    opacity: 0.55;
+}
+
+/* ---- menu ---- */
+.mp-menu-header {
+    font-weight: bold;
+}
+
+.mp-menu-provider-header {
+    font-weight: bold;
+    opacity: 0.9;
+    margin-top: 4px;
+}
+
+.mp-menu-status {
+    font-size: 0.9em;
+    opacity: 0.8;
+}

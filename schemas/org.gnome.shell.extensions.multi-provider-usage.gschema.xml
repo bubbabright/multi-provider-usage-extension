@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.multi-provider-usage"
+          path="/org/gnome/shell/extensions/multi-provider-usage/">
+
+    <key name="daemon-url" type="s">
+      <default>'http://127.0.0.1:8787'</default>
+      <summary>usage-daemon base URL</summary>
+      <description>Base URL of the usage-daemon that owns polling for every provider. Localhost only unless you know what you're doing.</description>
+    </key>
+
+    <key name="poll-interval" type="i">
+      <default>60</default>
+      <range min="10" max="3600"/>
+      <summary>Client re-read interval (seconds)</summary>
+      <description>How often the extension re-reads the daemon snapshots. The daemon does the real (slower) polling; this is a cheap local read.</description>
+    </key>
+
+    <key name="rotate-interval" type="i">
+      <default>15</default>
+      <range min="2" max="300"/>
+      <summary>Panel rotation interval (seconds)</summary>
+      <description>How often the panel switches which provider's bars it is showing. The popup always shows every provider regardless of this setting.</description>
+    </key>
+
+    <key name="show-icon" type="b">
+      <default>true</default>
+      <summary>Show the panel icon</summary>
+    </key>
+
+    <key name="show-provider-tag" type="b">
+      <default>true</default>
+      <summary>Show the active provider's name in the panel</summary>
+    </key>
+
+    <!-- Per-provider display overrides, keyed by provider id. The daemon's
+         own label is never edited or replaced in storage — these are a
+         user-chosen OVERLAY, rendered side by side with (not instead of) the
+         underlying identity. An id with no entry just falls back to the
+         daemon's label / no subtitle. Zero-touch: a new daemon provider
+         needs no schema/code change, it just has no override yet. -->
+    <key name="provider-alias" type="a{ss}">
+      <default>{}</default>
+      <summary>Per-provider display name override</summary>
+      <description>Optional user-chosen name shown in the panel instead of the daemon's own provider label. Keyed by provider id.</description>
+    </key>
+
+    <key name="provider-subtitle" type="a{ss}">
+      <default>{}</default>
+      <summary>Per-provider subtitle shown beside the display name</summary>
+      <description>Optional short text (e.g. "API") shown next to the provider name in the panel, side by side on the same line. Keyed by provider id.</description>
+    </key>
+
+    <key name="show-bar-labels" type="b">
+      <default>true</default>
+      <summary>Show the letter before each bar</summary>
+    </key>
+
+    <!-- Global column toggles, in panel order: logo = show-icon, name =
+         show-provider-tag, label = show-bar-labels, bar = show-panel-bar,
+         percent = show-panel-percent. Same "Show" row pattern as
+         claude-usage-extension's prefs, applied globally across every
+         provider (not per-provider — there is only one panel). -->
+    <key name="show-panel-bar" type="b">
+      <default>true</default>
+      <summary>Show progress bar column</summary>
+      <description>Global column toggle: whether the progress bar is drawn for every window on the active provider's row(s). Independent of the percent text.</description>
+    </key>
+
+    <key name="show-panel-percent" type="b">
+      <default>true</default>
+      <summary>Show percent column</summary>
+      <description>Global column toggle: whether the percentage text is drawn for every window on the active provider's row(s). Independent of the bar.</description>
+    </key>
+
+    <key name="stack-panel-bars" type="b">
+      <default>false</default>
+      <summary>Stack the active provider's bars vertically instead of side by side</summary>
+    </key>
+
+    <key name="warn-on-projected-depletion" type="b">
+      <default>false</default>
+      <summary>Flash the panel logo when the daemon projects a window to deplete before reset</summary>
+    </key>
+
+  </schema>
+</schemalist>
