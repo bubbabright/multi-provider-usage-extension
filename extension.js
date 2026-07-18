@@ -26,7 +26,30 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-const TRACK_W = 46; // px width of a panel bar track
+const TRACK_W = 46; // px width of a panel bar track — ALWAYS fixed (see the
+                     // "columns are rigid" rule): width never scales with
+                     // window count, only height/rowSpan does (_syncBar).
+const TRACK_H = 11;  // px height of one bar "cell" in stacked mode — the unit
+                     // a provider's bar(s) multiply when they have fewer
+                     // windows than the rotation's global max (see barRowSpan
+                     // in _renderPanelActive).
+
+// Ultra-compact single-unit duration for timeline tick labels ("4h", "16d") —
+// deliberately less precise than resetsIn()'s "4h 30m" rows; a tick label is
+// read at a glance next to N others, not on its own.
+function durationShort(ms) {
+    if (Number.isNaN(ms))
+        return '?';
+    if (ms <= 0)
+        return 'now';
+    const mins = Math.round(ms / 60000);
+    const h = Math.floor(mins / 60);
+    if (h >= 24)
+        return `${Math.floor(h / 24)}d`;
+    if (h > 0)
+        return `${h}h`;
+    return `${mins}m`;
+}
 
 function resetsIn(iso) {
     if (!iso)
@@ -62,7 +85,11 @@ function fmtPct(pct) {
 // multiple chars, e.g. '5h', 'Wk', 'Mo', 'Se'); else first letter of label as
 // a generic fallback for providers that don't set one. Column width is fixed
 // in CSS (.mp-bar-letter) so 1- and 2-char abbreviations align.
-function letterFor(win) {
+function letterFor(providerId, win, settings) {
+    const overrides = settings.get_value('bar-label').deep_unpack();
+    const override = overrides[`${providerId}:${win.id}`];
+    if (override)
+        return override;
     if (win.letter)
         return win.letter.toString();
     return (win.label ?? win.id ?? '?').toString().charAt(0).toUpperCase();
@@ -82,6 +109,7 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
         this._bars = new Map();      // window.id -> bar actors (reused across rotation)
         this._menuSections = new Map(); // provider id -> {header, section}
         this._iconPaths = new Map(); // provider id -> cached icon file path, or null if none
+        this._iconVariants = new Map(); // provider id -> variant string the cached path was fetched for
 
         this._buildPanel();
         this._buildMenuSkeleton();
@@ -90,6 +118,7 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
             this._applyVisibility();
             this._restartPollTimer();
             this._restartRotateTimer();
+            this._refreshChangedIcons();
         });
 
         this._applyVisibility();
@@ -198,7 +227,6 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
         label.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
         const track = new St.Widget({
             style_class: 'mp-bar-track',
-            style: `width:${TRACK_W}px;`,
             y_align: Clutter.ActorAlign.CENTER,
         });
         const fill = new St.Widget({style_class: 'mp-bar-fill'});
@@ -216,17 +244,26 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
     // Ensure a bar exists for a descriptor and update its visual state (text/
     // fill/color/visibility flags). Grid placement happens separately in
     // _renderPanelActive, which knows the full window list and stack setting.
-    _syncBar(win) {
+    // Width is ALWAYS TRACK_W — fixed, per the "columns are rigid" rule, same
+    // basis as the tag/subtitle fixed-width fix. rowSpan is THIS render's bar
+    // thickness multiplier (see _renderPanelActive): a provider with fewer
+    // windows than the rotation's global max gets proportionally TALLER bars
+    // (spanning the rows a fuller provider would otherwise use), not wider
+    // ones — height is the axis that absorbs "how many metrics" varies by,
+    // width never does.
+    _syncBar(providerId, win, rowSpan) {
         let bar = this._bars.get(win.id);
         if (!bar) {
             bar = this._makeBar();
             this._bars.set(win.id, bar);
         }
-        bar.label.text = letterFor(win);
+        bar.label.text = letterFor(providerId, win, this._settings);
         bar.label.style = `color:${win.color ?? ''};`;
+        const h = TRACK_H * rowSpan;
+        bar.track.style = `width:${TRACK_W}px; height:${h}px;`;
         const pct = win.pct == null ? null : Math.max(0, Math.min(100, win.pct));
         const px = pct == null ? 0 : Math.round((pct / 100) * TRACK_W);
-        bar.fill.style = `width:${px}px; background-color:${win.color ?? '#888'};`;
+        bar.fill.style = `width:${px}px; height:${h}px; background-color:${win.color ?? '#888'};`;
         bar.percent.text = fmtPct(win.pct);
         bar.percent.style = `color:${win.color ?? ''};`;
         return bar;
@@ -237,6 +274,27 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
         // change grid attachment, not just a style class — recompute the
         // actual cell map, not just visibility flags.
         this._renderPanelActive();
+    }
+
+    // Max window count across every provider in the current rotation, not
+    // just whoever is active — the shared basis for both row count (stacked
+    // mode) and per-bar width (see _globalRows and the perBarW comment in
+    // _renderPanelActive).
+    _globalMaxWindows() {
+        let max = 1;
+        for (const entry of this._providers.values()) {
+            const n = entry?.snapshot?.windows?.length ?? 0;
+            if (n > max)
+                max = n;
+        }
+        return max;
+    }
+
+    // Row count for the CURRENT rotation set, not just whoever is active —
+    // see the comment at its call site in _renderPanelActive for why this
+    // must be global rather than per-provider.
+    _globalRows(stacked) {
+        return stacked ? this._globalMaxWindows() : 1;
     }
 
     // Render the panel for whichever provider is currently active (rotated
@@ -270,12 +328,17 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
         const windows = snap?.windows ?? [];
         const ids = new Set(windows.map(w => w.id));
 
-        // R = how many rows the panel actually has right now. 1 whenever
-        // bars are side by side; when stacked, R = however many windows this
-        // provider has THIS render — not a hardcoded 2. A 3-window provider
-        // just gets 3 rows, no code change. Every placement below derives
-        // from R instead of branching separately on the stacked boolean.
-        const rows = stacked ? Math.max(windows.length, 1) : 1;
+        // R = how many rows the panel has, PER THE WHOLE PROVIDER SET, not
+        // just whoever is active this render. Providers have different
+        // window counts (mistral: 1 without an admin key, grok: 2, opencode-go:
+        // 3) — if R tracked only the active provider, every column after the
+        // icon would shift left/right as rotation switched between them (and
+        // the whole panel would grow/shrink), which reads as the indicator
+        // jittering. Basing R on the global max keeps icon/tag/bar columns
+        // (and total panel height) identical across every provider in
+        // rotation; a provider with fewer windows than the max just leaves
+        // its unused rows empty instead of collapsing the columns.
+        const rows = this._globalRows(stacked);
 
         this._attachIfNeeded(this._icon, this, '_iconAttached', showIcon, 0, 0, 1, rows);
 
@@ -305,14 +368,30 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
         const showLabel = this._settings.get_boolean('show-bar-labels');
         const showBar = this._settings.get_boolean('show-panel-bar');
         const showPercent = this._settings.get_boolean('show-panel-percent');
+        // Reserved bar-row space is fixed at `rows` (global max windows,
+        // stacked mode only), then split evenly by THIS provider's own
+        // window count: 1 window gets a bar `rows`-tall (fills the whole
+        // reserved area), 2 windows split it half each, 3 split it in
+        // thirds — height/rowSpan is the axis that absorbs "how many
+        // windows", never width (see TRACK_W/_syncBar) — a 1-window
+        // provider's bar getting WIDER instead of TALLER would vary the
+        // column layout per rotation, reintroducing the exact jitter
+        // _globalRows/fixed-width-tag already fix. Unstacked has no spare
+        // rows to absorb (rows is always 1), so it's always rowSpan 1.
+        const barRowSpan = stacked
+            ? Math.max(1, Math.round(rows / Math.max(windows.length, 1)))
+            : 1;
         let col = barStartCol;
-        windows.forEach((win, i) => {
-            const bar = this._syncBar(win);
-            const row = stacked ? i : 0;
-            if (stacked)
+        let rowCursor = 0;
+        windows.forEach((win) => {
+            const bar = this._syncBar(id, win, barRowSpan);
+            const row = stacked ? rowCursor : 0;
+            if (stacked) {
                 col = barStartCol;
+                rowCursor += barRowSpan;
+            }
             const place = (actor, attachedKey, want) => {
-                this._attachIfNeeded(actor, bar, attachedKey, want, col, row, 1, 1);
+                this._attachIfNeeded(actor, bar, attachedKey, want, col, row, 1, barRowSpan);
                 if (want)
                     col++;
             };
@@ -363,6 +442,18 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(this._statusItem);
         this._statusItem.visible = false;
 
+        // Rank-order reset timeline — left = soonest, right = latest, across
+        // EVERY provider/window at once. Deliberately NOT proportional to
+        // real time (a 20-min window and a 16-day window would collapse onto
+        // the same pixel) — evenly-spaced ticks in sorted order, color =
+        // each window's own Okabe-Ito color, tiny duration label per tick.
+        // See _rebuildTimeline().
+        this._timelineItem = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        this._timelineTrack = new St.BoxLayout({style_class: 'mp-menu-timeline', x_expand: true});
+        this._timelineItem.add_child(this._timelineTrack);
+        this.menu.addMenuItem(this._timelineItem);
+        this._timelineItem.visible = false; // no data yet; _rebuildTimeline reveals it
+
         // one dynamic section per provider, keyed by provider id
         this._providersSection = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._providersSection);
@@ -410,12 +501,23 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
             for (const win of windows) {
                 let row = m.rows.get(win.id);
                 if (!row) {
+                    // 3 real columns (name/pct/reset), not one label with
+                    // manual space-padding — spaces don't align in a
+                    // proportional font, and label length varies per
+                    // provider ("5h"/"Wk" vs "Session"/"Weekly"). See
+                    // .mp-menu-window-* in stylesheet.css.
                     row = new PopupMenu.PopupMenuItem('', {reactive: false});
+                    row.label.add_style_class_name('mp-menu-window-name');
+                    row.pctLabel = new St.Label({style_class: 'mp-menu-window-pct', y_align: Clutter.ActorAlign.CENTER});
+                    row.resetLabel = new St.Label({style_class: 'mp-menu-window-reset', y_align: Clutter.ActorAlign.CENTER});
+                    row.add_child(row.pctLabel);
+                    row.add_child(row.resetLabel);
                     m.rows.set(win.id, row);
                     m.section.addMenuItem(row);
                 }
-                const reset = resetsIn(win.resets_at);
-                row.label.text = `   ${win.label ?? win.id}   ${fmtPct(win.pct)}${reset ? '   ' + reset : ''}`;
+                row.label.text = win.label ?? win.id;
+                row.pctLabel.text = fmtPct(win.pct);
+                row.resetLabel.text = resetsIn(win.resets_at);
             }
             for (const [wid, row] of m.rows) {
                 if (!wids.has(wid)) {
@@ -432,6 +534,48 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
                 m.section.destroy();
                 this._menuSections.delete(id);
             }
+        }
+
+        this._rebuildTimeline();
+    }
+
+    // Flat list of every (provider, window) pair with a valid resets_at,
+    // sorted soonest-first, rendered as evenly-spaced colored ticks. Rebuilt
+    // from scratch each call (cheap — at most a handful of windows) rather
+    // than diffed, same tradeoff _renderPanelActive makes for bars.
+    _rebuildTimeline() {
+        const entries = [];
+        for (const id of this._order) {
+            const windows = this._providers.get(id)?.snapshot?.windows ?? [];
+            for (const win of windows) {
+                const ms = Date.parse(win.resets_at);
+                if (!Number.isNaN(ms))
+                    entries.push({ms, color: win.color});
+            }
+        }
+        entries.sort((a, b) => a.ms - b.ms);
+
+        this._timelineTrack.remove_all_children();
+        this._timelineItem.visible = entries.length > 1; // nothing to compare with 0-1 windows
+        const now = Date.now();
+        for (const e of entries) {
+            // x_expand on every cell: St.BoxLayout has no `homogeneous` prop
+            // (that's Clutter.BoxLayout/Gtk, not St) — expand-on-all is the
+            // St equivalent, splits leftover space evenly across cells.
+            const cell = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'mp-menu-timeline-cell'});
+            const tick = new St.Widget({
+                style_class: 'mp-menu-timeline-tick',
+                style: `background-color:${e.color ?? '#888'};`,
+                x_align: Clutter.ActorAlign.CENTER,
+            });
+            const label = new St.Label({
+                text: durationShort(e.ms - now),
+                style_class: 'mp-menu-timeline-label',
+                x_align: Clutter.ActorAlign.CENTER,
+            });
+            cell.add_child(tick);
+            cell.add_child(label);
+            this._timelineTrack.add_child(cell);
         }
     }
 
@@ -503,18 +647,22 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
         });
     }
 
-    // Fetch a provider's icon once (GET /usage/{id}/icon) and cache it to disk
-    // so St.Icon can load it by path. Nothing here names a specific provider —
-    // any daemon plugin that ships an icon file just starts appearing. No icon
-    // -> cached as null, panel falls back to the stock icon for that provider.
+    // Fetch a provider's icon (GET /usage/{id}/icon[?variant=x]) and cache it
+    // to disk so St.Icon can load it by path. Nothing here names a specific
+    // provider — any daemon plugin that ships an icon file just starts
+    // appearing. No icon -> cached as null, panel falls back to the stock
+    // icon for that provider. Re-fetched whenever the user's chosen variant
+    // for this provider changes (see _refreshChangedIcons).
     async _ensureIcon(id) {
         const EXT_BY_TYPE = {
             'image/svg+xml': 'svg',
             'image/png': 'png',
             'image/jpeg': 'jpg',
         };
+        const variant = this._iconVariantFor(id);
         try {
-            const {bytes, contentType} = await this._getBytes(`/usage/${id}/icon`);
+            const qs = variant ? `?variant=${encodeURIComponent(variant)}` : '';
+            const {bytes, contentType} = await this._getBytes(`/usage/${id}/icon${qs}`);
             const ext = EXT_BY_TYPE[contentType.split(';')[0].trim()];
             if (!ext) {
                 this._iconPaths.set(id, null);
@@ -522,11 +670,39 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
             }
             const dir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'multi-provider-usage', 'icons']);
             GLib.mkdir_with_parents(dir, 0o755);
-            const path = GLib.build_filenamev([dir, `${id}.${ext}`]);
+            const path = GLib.build_filenamev([dir, `${id}-${variant || 'default'}.${ext}`]);
             GLib.file_set_contents(path, bytes);
             this._iconPaths.set(id, path);
         } catch (_e) {
-            this._iconPaths.set(id, null);
+            // Fetch failed (daemon restart, transient network blip, etc).
+            // Keep whatever icon path — good or already-null — was cached
+            // before this attempt, same last-known-good policy the daemon
+            // itself uses for snapshots. Only set null if we've never had a
+            // path for this id at all, so a provider that HAD a working icon
+            // doesn't lose it over one bad fetch (icon fetch is fire-once
+            // per session, not retried, so overwriting here was permanent).
+            if (!this._iconPaths.has(id))
+                this._iconPaths.set(id, null);
+        }
+    }
+
+    _iconVariantFor(id) {
+        return this._settings.get_value('provider-icon-variant').deep_unpack()[id] ?? '';
+    }
+
+    // Compares each known provider's current icon-variant setting against
+    // what its cached icon was fetched for; re-fetches (and re-renders if
+    // active) any that changed. Cheap no-op on unrelated settings changes.
+    _refreshChangedIcons() {
+        for (const id of this._order) {
+            const variant = this._iconVariantFor(id);
+            if (this._iconVariants.get(id) === variant)
+                continue;
+            this._iconVariants.set(id, variant);
+            this._ensureIcon(id).then(() => {
+                if (this._order[this._activeIdx % this._order.length] === id)
+                    this._renderPanelActive();
+            });
         }
     }
 
@@ -559,6 +735,7 @@ class MultiProviderUsageIndicator extends PanelMenu.Button {
             // panel if it lands while this provider happens to be active.
             if (!this._iconPaths.has(id)) {
                 this._iconPaths.set(id, null);
+                this._iconVariants.set(id, this._iconVariantFor(id));
                 this._ensureIcon(id).then(() => {
                     if (this._order[this._activeIdx % this._order.length] === id)
                         this._renderPanelActive();

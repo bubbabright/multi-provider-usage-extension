@@ -13,28 +13,30 @@
 .mp-provider-tag {
     font-size: 0.85em;
     opacity: 0.85;
-    /* Floor width: this is the only actor in its grid column, and it spans
-     * 2 rows in stacked mode with no span=1 sibling there — GridLayout can
-     * fail to size a column from a spanning-only child, collapsing it to
-     * ~0 width. The icon doesn't have this problem because CSS icon-size
-     * forces its size regardless of column math; text has nothing to force
-     * a floor unless we set one explicitly. */
-    min-width: 60px;
-    /* Ceiling: pairs with clutter_text.ellipsize (set in JS — Pango, not a
-     * CSS property) so a long provider name truncates to "Ollama Cl…"
-     * instead of growing the column/panel indefinitely. */
-    max-width: 90px;
+    /* FIXED width, not a min/max range: this column's actual size is what
+     * determines this whole indicator's total width, and GNOME's status
+     * area packs indicators from the right edge of the screen — a narrower
+     * widget (short label, e.g. "Grok") sits with its left edge further
+     * right than a wider one ("OpenCode Go"), so the indicator visibly
+     * shifts per rotation. A single fixed width (not min/max) makes total
+     * widget width — and therefore its screen position — invariant to which
+     * provider is active. JS ellipsize (Pango, not CSS) truncates overflow
+     * on long labels; short labels just leave trailing space, same as any
+     * other fixed-width column here (bar-letter, bar-percent).
+     * Also still floors the column so GridLayout can't collapse it to ~0
+     * width in stacked mode, where this is the only actor in its column and
+     * spans 2 rows with no span=1 sibling there. */
+    width: 90px;
 }
 
 .mp-provider-subtitle {
     font-size: 0.75em;
     opacity: 0.6;
-    /* Same shrink-to-fit reasoning as .mp-provider-tag: floor so a spanning-
-     * only column can't collapse, ceiling + JS ellipsize so it can't grow
-     * unbounded either. Only ever attached when non-empty (see
-     * _renderPanelActive), so no floor width is wasted on an unused column. */
-    min-width: 24px;
-    max-width: 60px;
+    /* Same fixed-width reasoning as .mp-provider-tag just above — a range
+     * lets this column's size (and so total widget width) vary per active
+     * provider. Only ever attached when non-empty (see _renderPanelActive),
+     * so no width is wasted on an unused column when it's detached. */
+    width: 60px;
 }
 
 .mp-bar-letter {
@@ -100,4 +102,49 @@
 .mp-menu-status {
     font-size: 0.9em;
     opacity: 0.8;
+}
+
+.mp-menu-window-name {
+    margin-left: 12px;
+    /* Floor so every provider's pct/reset columns start at the same x
+     * regardless of label length ("5h"/"Wk" vs "Session"/"Weekly") — same
+     * reasoning as .mp-provider-tag's min-width, real column not padded
+     * spaces (spaces in a proportional font don't align; a floor width
+     * does, and holds even if a future provider's label is longer still —
+     * it just grows the column, doesn't break the alignment that exists). */
+    min-width: 70px;
+}
+
+.mp-menu-window-pct {
+    /* Reuses .mp-bar-percent's exact reasoning (monospace + fmtPct's fixed
+     * 5-char pad) so "2%" and "83.1%" right-align on the same column here
+     * too, not just in the panel bars. */
+    font-family: monospace;
+    font-size: 0.85em;
+    text-align: end;
+}
+
+.mp-menu-window-reset {
+    font-size: 0.85em;
+    opacity: 0.7;
+    margin-left: 10px;
+}
+
+/* Rank-order reset timeline (see _rebuildTimeline, extension.js) — cells are
+ * x_expand St.BoxLayout children (St has no `homogeneous` prop), so leftover
+ * track width splits evenly across however many windows exist this render. */
+.mp-menu-timeline {
+    margin: 6px 12px;
+}
+
+.mp-menu-timeline-tick {
+    width: 18px;
+    height: 6px;
+    border-radius: 3px;
+}
+
+.mp-menu-timeline-label {
+    font-size: 0.68em;
+    opacity: 0.65;
+    margin-top: 2px;
 }

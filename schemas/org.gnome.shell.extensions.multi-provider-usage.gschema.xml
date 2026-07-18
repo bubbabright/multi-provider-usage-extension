@@ -51,9 +51,21 @@
       <description>Optional short text (e.g. "API") shown next to the provider name in the panel, side by side on the same line. Keyed by provider id.</description>
     </key>
 
+    <key name="provider-icon-variant" type="a{ss}">
+      <default>{}</default>
+      <summary>Per-provider icon variant override</summary>
+      <description>Which icon variant (e.g. "dark", "light") to request from the daemon for a provider, from the set the daemon reports as available via GET /usage/:id/icons. Empty/missing entry means "default". Keyed by provider id.</description>
+    </key>
+
     <key name="show-bar-labels" type="b">
       <default>true</default>
       <summary>Show the letter before each bar</summary>
+    </key>
+
+    <key name="bar-label" type="a{ss}">
+      <default>{}</default>
+      <summary>Per-window bar label override</summary>
+      <description>Optional user-chosen abbreviation shown before a bar instead of the daemon's own window.letter. Keyed by "providerId:windowId" since window ids (e.g. "session") repeat across providers.</description>
     </key>
 
     <!-- Global column toggles, in panel order: logo = show-icon, name =

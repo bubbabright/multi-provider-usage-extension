@@ -35,6 +35,28 @@ function setDictEntry(settings, key, id, value) {
     settings.set_value(key, new GLib.Variant('a{ss}', dict));
 }
 
+// Caption-above-widget cell, same building block _displayPage's columnsBox
+// uses for its switches — reused here so the Providers page reads as the
+// same left-to-right "picture of the panel" pattern, not a different idiom.
+function captionedCell(caption, widget) {
+    const cell = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 6, halign: Gtk.Align.CENTER});
+    const label = new Gtk.Label({label: caption, halign: Gtk.Align.CENTER});
+    label.add_css_class('caption');
+    cell.append(label);
+    cell.append(widget);
+    return cell;
+}
+
+// Clickable ActionRow — whole row activates, external-link glyph signals it.
+// Gio.AppInfo.launch_default_for_uri hands off to the system browser; prefs
+// windows have no Soup-safe reason to render link content themselves.
+function linkRow(title, subtitle, uri) {
+    const row = new Adw.ActionRow({title, subtitle, activatable: true});
+    row.add_suffix(new Gtk.Image({icon_name: 'adw-external-link-symbolic', valign: Gtk.Align.CENTER}));
+    row.connect('activated', () => Gio.AppInfo.launch_default_for_uri(uri, null));
+    return row;
+}
+
 function getJson(session, url) {
     return new Promise((resolve, reject) => {
         const msg = Soup.Message.new('GET', url);
@@ -60,48 +82,94 @@ export default class MultiProviderUsagePreferences extends ExtensionPreferences 
 
         window.add(this._generalPage(settings));
         window.add(this._displayPage(settings));
-        const namesPage = this._namesPage(settings);
-        window.add(namesPage);
+        const providersPage = this._providersPage(settings);
+        window.add(providersPage);
         const authPage = this._authPage(settings, session);
         window.add(authPage);
         window.add(this._reportPage(settings, session));
         window.add(this._aboutPage());
 
-        this._loadProviders(settings, session, authPage, namesPage);
+        this._loadProviders(settings, session, authPage, providersPage);
     }
 
-    _namesPage(settings) {
+    _providersPage(settings) {
         const page = new Adw.PreferencesPage({
-            title: 'Names',
+            title: 'Providers',
             icon_name: 'font-x-generic-symbolic',
         });
         this._namesGroup = new Adw.PreferencesGroup({
             title: 'Display names',
-            description: 'Optional per-provider overrides, shown side by side in the panel — the daemon’s own label is never changed, this is just a display overlay. Loading configured providers…',
+            description: 'Optional per-provider overrides — daemon’s own label/letters are never changed, this is just a display overlay. Each row is left-to-right in panel order, same as the Display tab: Logo, Name, Label. Loading configured providers…',
         });
         page.add(this._namesGroup);
         return page;
     }
 
-    _nameRow(settings, id, config) {
-        const expander = new Adw.ExpanderRow({
-            title: config?.label ?? id,
-            subtitle: 'Leave blank to use the daemon default for either field.',
+    // One horizontal row per provider, cells left-to-right in PANEL order —
+    // Logo, Name, Label — mirroring _displayPage's columnsBox so the two
+    // pages read as the same picture. Subtitle rides inside the Name cell
+    // (stacked under the entry) since it has no separate panel column of its
+    // own. `windows` (from the provider's live snapshot, may be []) drives
+    // one Label entry per window — bar-label overrides are keyed
+    // "providerId:windowId" since window ids repeat across providers.
+    _nameRow(settings, id, config, iconVariants, windows) {
+        const row = new Adw.PreferencesRow({activatable: false, selectable: false, title: config?.label ?? id});
+        const box = new Gtk.Box({
+            orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 12,
+            margin_top: 12,
+            margin_bottom: 12,
+            margin_start: 12,
+            margin_end: 12,
         });
+        row.set_child(box);
 
-        const alias = new Adw.EntryRow({title: 'Display name'});
-        alias.text = getDictEntry(settings, 'provider-alias', id);
+        const heading = new Gtk.Label({label: config?.label ?? id, width_chars: 10, xalign: 0});
+        heading.add_css_class('heading');
+        box.append(heading);
+
+        // Logo
+        if (iconVariants?.length > 1) {
+            const names = ['default', ...iconVariants.filter(v => v !== 'default')];
+            const icon = new Gtk.DropDown({model: Gtk.StringList.new(names)});
+            const current = getDictEntry(settings, 'provider-icon-variant', id) || 'default';
+            icon.selected = Math.max(0, names.indexOf(current));
+            icon.connect('notify::selected', () => {
+                const chosen = names[icon.selected];
+                setDictEntry(settings, 'provider-icon-variant', id, chosen === 'default' ? '' : chosen);
+            });
+            box.append(captionedCell('Logo', icon));
+        }
+
+        // Name (+ subtitle, stacked underneath — no panel column of its own)
+        const nameBox = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 4});
+        const alias = new Gtk.Entry({placeholder_text: config?.label ?? id, width_chars: 12});
+        alias.set_text(getDictEntry(settings, 'provider-alias', id));
         alias.connect('changed', () =>
-            setDictEntry(settings, 'provider-alias', id, alias.text.trim()));
-        expander.add_row(alias);
-
-        const subtitle = new Adw.EntryRow({title: 'Subtitle'});
-        subtitle.text = getDictEntry(settings, 'provider-subtitle', id);
+            setDictEntry(settings, 'provider-alias', id, alias.get_text().trim()));
+        nameBox.append(alias);
+        const subtitle = new Gtk.Entry({placeholder_text: 'Subtitle', width_chars: 12});
+        subtitle.set_text(getDictEntry(settings, 'provider-subtitle', id));
         subtitle.connect('changed', () =>
-            setDictEntry(settings, 'provider-subtitle', id, subtitle.text.trim()));
-        expander.add_row(subtitle);
+            setDictEntry(settings, 'provider-subtitle', id, subtitle.get_text().trim()));
+        subtitle.add_css_class('caption');
+        nameBox.append(subtitle);
+        box.append(captionedCell('Name', nameBox));
 
-        return expander;
+        // Label — one small entry per window, in the same order the panel
+        // shows the bars (windows[] order IS display order, see README).
+        for (const win of windows ?? []) {
+            const dictId = `${id}:${win.id}`;
+            const defaultLetter = win.letter?.toString()
+                ?? (win.label ?? win.id ?? '?').toString().charAt(0).toUpperCase();
+            const entry = new Gtk.Entry({placeholder_text: defaultLetter, width_chars: 3, max_length: 4});
+            entry.set_text(getDictEntry(settings, 'bar-label', dictId));
+            entry.connect('changed', () =>
+                setDictEntry(settings, 'bar-label', dictId, entry.get_text().trim()));
+            box.append(captionedCell(win.label ?? win.id, entry));
+        }
+
+        return row;
     }
 
     _generalPage(settings) {
@@ -132,7 +200,7 @@ export default class MultiProviderUsagePreferences extends ExtensionPreferences 
         const rotate = new Adw.SpinRow({
             title: 'Panel rotation interval (seconds)',
             subtitle: 'How often the panel switches which provider it is showing. The popup always shows all providers regardless.',
-            adjustment: new Gtk.Adjustment({lower: 2, upper: 300, step_increment: 5}),
+            adjustment: new Gtk.Adjustment({lower: 2, upper: 300, step_increment: 1}),
         });
         settings.bind('rotate-interval', rotate, 'value', Gio.SettingsBindFlags.DEFAULT);
         group.add(rotate);
@@ -227,10 +295,10 @@ export default class MultiProviderUsagePreferences extends ExtensionPreferences 
     }
 
     // Discovers configured providers + their auth.kind, then renders one row
-    // per provider in BOTH the Auth and Names groups — generic dispatch on
-    // kind for auth, but Names needs no dispatch at all (same two text
-    // fields for every provider regardless of auth kind).
-    async _loadProviders(settings, session, authPage, namesPage) {
+    // per provider in BOTH the Auth and Providers groups — generic dispatch
+    // on kind for auth, but Providers needs no dispatch at all (same fields
+    // for every provider regardless of auth kind).
+    async _loadProviders(settings, session, authPage, providersPage) {
         let list;
         try {
             list = await getJson(session, `${daemonUrl(settings)}/usage/providers`);
@@ -250,6 +318,10 @@ export default class MultiProviderUsagePreferences extends ExtensionPreferences 
             try {
                 snap = await getJson(session, `${daemonUrl(settings)}/usage/${id}/current`);
             } catch (_e) { /* no snapshot yet */ }
+            let iconVariants = [];
+            try {
+                iconVariants = await getJson(session, `${daemonUrl(settings)}/usage/${id}/icons`);
+            } catch (_e) { /* no icon(s) for this provider */ }
 
             const kind = config?.auth?.kind;
             if (kind === 'cookie')
@@ -262,7 +334,7 @@ export default class MultiProviderUsagePreferences extends ExtensionPreferences 
                     subtitle: `Unrecognized auth kind '${kind}' — nothing to configure here yet.`,
                 }));
 
-            this._namesGroup.add(this._nameRow(settings, id, config));
+            this._namesGroup.add(this._nameRow(settings, id, config, iconVariants, snap?.windows));
         }
     }
 
@@ -435,16 +507,52 @@ ${frames}
             title: 'About',
             icon_name: 'help-about-symbolic',
         });
-        const group = new Adw.PreferencesGroup();
-        page.add(group);
-        group.add(new Adw.ActionRow({
-            title: 'Multi-Provider Usage',
-            subtitle: 'Thin client of usage-daemon — shows every provider it publishes, one panel indicator.',
+
+        const header = new Adw.PreferencesGroup();
+        page.add(header);
+        const headerBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 8,
+            halign: Gtk.Align.CENTER,
+            margin_top: 12,
+            margin_bottom: 12,
+        });
+        headerBox.append(new Gtk.Image({icon_name: 'utilities-system-monitor-symbolic', pixel_size: 48}));
+        const title = new Gtk.Label({label: `<b>${this.metadata.name}</b>`, use_markup: true});
+        headerBox.append(title);
+        headerBox.append(new Gtk.Label({label: `v${this.metadata.version ?? 1}`, css_classes: ['dim-label']}));
+        headerBox.append(new Gtk.Label({
+            label: 'One panel indicator for every provider usage-daemon publishes. Thin\nclient only — reads localhost, never polls an upstream API itself.',
+            justify: Gtk.Justification.CENTER,
+            css_classes: ['dim-label'],
         }));
-        group.add(new Adw.ActionRow({
-            title: 'Daemon',
-            subtitle: 'github.com/bubbabright/usage-daemon',
-        }));
+        const headerRow = new Adw.PreferencesRow({activatable: false, selectable: false});
+        headerRow.set_child(headerBox);
+        header.add(headerRow);
+
+        const daemon = new Adw.PreferencesGroup({title: 'Daemon'});
+        page.add(daemon);
+        daemon.add(linkRow('usage-daemon', 'Owns polling, auth, history, burn-rate — required',
+            'https://github.com/bubbabright/usage-daemon'));
+
+        const standalones = new Adw.PreferencesGroup({
+            title: 'Standalone extensions',
+            description: 'Same providers, no daemon required — each polls and authenticates on its own.',
+        });
+        page.add(standalones);
+        standalones.add(linkRow('Claude Usage', 'Claude Code usage, standalone (own engine)',
+            'https://github.com/bubbabright/claude-usage-extension'));
+        standalones.add(linkRow('SuperGrok Usage', 'SuperGrok / Grok Build usage, standalone (own engine)',
+            'https://github.com/bubbabright/supergrok-usage-extension'));
+        standalones.add(linkRow('Ollama Cloud Usage', 'Daemon-only descriptor-client template, superseded by this extension',
+            'https://github.com/bubbabright/ollama-cloud-usage-extension'));
+
+        const footer = new Adw.PreferencesGroup();
+        page.add(footer);
+        footer.add(linkRow('Report an issue', 'GitHub issues on this repo',
+            `${this.metadata.url}/issues`));
+        footer.add(new Adw.ActionRow({title: 'License', subtitle: 'MIT — see LICENSE in the repo'}));
+
         return page;
     }
 }
